@@ -19,7 +19,7 @@ def get_model():
             urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
             print("Model berhasil didownload!")
 
-        import tensorflow as tf  # ← hanya tensorflow yang lazy
+        import tensorflow as tf  # type: ignore # ← hanya tensorflow yang lazy
         print("Loading model...")
         _model = tf.keras.models.load_model(MODEL_PATH)
         print("Model siap!")
