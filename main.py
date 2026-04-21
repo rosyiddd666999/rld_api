@@ -1,8 +1,11 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from predict import predict_image
 from models import PredictionResponse
-import os
 
 app = FastAPI(
     title="Rice Leaf Disease API",
