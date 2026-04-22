@@ -7,7 +7,7 @@ def get_rice_feedback(disease_name: str):
 
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
         prompt = (
             f"Berperanlah sebagai ahli pertanian. Berikan saran teknis untuk penyakit padi '{disease_name}' "
             f"dalam 3 poin: 1. Penyebab, 2. Gejala Utama, 3. Solusi Teknis. "
