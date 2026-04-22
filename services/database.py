@@ -13,9 +13,8 @@ def get_db_conn():
 
 def get_or_create_user(google_id, email, name):
     conn = get_db_conn()
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
     
-    # Use INSERT IGNORE to skip if email already exists
     cursor.execute("""
         INSERT IGNORE INTO users (google_id, email, name)
         VALUES (%s, %s, %s)
@@ -23,7 +22,6 @@ def get_or_create_user(google_id, email, name):
     
     conn.commit()
     
-    # Always fetch the user after insert
     cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
     user = cursor.fetchone()
     cursor.close()
