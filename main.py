@@ -1,25 +1,26 @@
 import os
-import json
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+import asyncio
 import requests
-import mysql.connector
-from typing import List
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header
+from typing import List, Optional
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header, Form
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-from predict import predict_image, get_rice_feedback, get_model
 from models import PredictionResponse, HistoryItem
+from services.ai_engine import predict_image, get_model
+from services.gemini_logic import get_rice_feedback
+from services.database import get_or_create_user, save_prediction, fetch_history_by_user
 
 load_dotenv()
 
-
-# Lifespan untuk preload model saat startup (Senior Practice)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    get_model()  # Load model ke RAM saat server start
+    get_model() # Preload model
     yield
-
 
 app = FastAPI(title="PadiCare AI BFF", lifespan=lifespan)
 
@@ -30,109 +31,83 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-def get_db():
-    conn = mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
-        connect_timeout=10,
-    )
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-def verify_api_key(x_api_key: str = Header(...)):
+def verify_key(x_api_key: str = Header(...)):
     if x_api_key != os.getenv("API_KEY"):
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return x_api_key
 
-
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
-ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+@app.get("/")
+async def root():
+    return {"message": "PadiCare AI BFF is Running"}
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(file: UploadFile = File(...), api_key: str = Depends(verify_api_key)):
-    # 1. Validasi Ekstensi (Lakukan ini sebelum baca file agar cepat)
-    file_ext = file.filename.split(".")[-1].lower()
-    if file_ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Ekstensi .{file_ext} tidak didukung. Gunakan JPG, JPEG, atau PNG.",
-        )
-
-    # 2. Baca file HANYA SATU KALI
+async def predict(
+    file: UploadFile = File(...),
+    google_id: str = Form(...),
+    email: str = Form(...),
+    name: str = Form(...),
+    alamat: str = Form(None),
+    api_key: str = Depends(verify_key)
+):
+    # 1. Baca File & Prediksi Lokal (CPU)
     content = await file.read()
-    file_size = len(content)
-
-    # 3. Validasi Ukuran & MIME Type
-    if file_size > 5 * 1024 * 1024: # 5MB
-        raise HTTPException(status_code=413, detail="File terlalu besar. Maksimal 5MB.")
-    
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(status_code=400, detail="File bukan gambar yang valid.")
-
-    # 4. AI Lokal: Prediksi
-    # Gunakan 'content' yang sudah kita simpan di variabel
     result = predict_image(content)
-
-    # 5. AI Gemini: Feedback
-    feedback = get_rice_feedback(result["predicted_class"])
-
-    # 6. Storage & DB Orchestration (Isolasi Error)
-    image_name = file.filename
+    
+    # 2. Eksekusi PARALEL untuk Gemini & Upload cPanel
     try:
-        # Kirim ke cPanel Storage
-        files = {"file": (file.filename, content, file.content_type)}
-        storage_res = requests.post(
-            os.getenv("CPANEL_UPLOAD_URL"), files=files, timeout=10
+        # Task 1: Tanya Gemini
+        feedback_task = asyncio.to_thread(get_rice_feedback, result['predicted_class'])
+        
+        # Task 2: Upload ke cPanel
+        upload_task = asyncio.to_thread(
+            requests.post, 
+            os.getenv("CPANEL_UPLOAD_URL"), 
+            files={"file": (file.filename, content, file.content_type)},
+            timeout=8
         )
-        if storage_res.status_code == 200:
-            image_name = storage_res.json().get("file_name", file.filename)
 
-        # Simpan ke MySQL cPanel
-        db = next(get_db())
-        cursor = db.cursor()
-        query = """INSERT INTO history_prediksi 
-                   (image_name, predicted_class, confidence, all_probabilities, feedback) 
-                   VALUES (%s, %s, %s, %s, %s)"""
-        cursor.execute(
-            query,
-            (
-                image_name,
-                result["predicted_class"],
-                result["confidence"],
-                json.dumps(result["all_probabilities"]),
-                feedback,
-            ),
-        )
-        db.commit()
-        cursor.close()
+        # Task 3: Find/Create User di DB
+        user_task = asyncio.to_thread(get_or_create_user, google_id, email, name)
+
+        # Jalankan semua secara bersamaan
+        feedback, storage_res, user_id = await asyncio.gather(feedback_task, upload_task, user_task)
+
+        # Ambil nama file asli dari storage
+        image_name = storage_res.json().get("file_name", file.filename) if storage_res.status_code == 200 else file.filename
+
+        # 3. Simpan ke Database History (Async)
+        await asyncio.to_thread(save_prediction, user_id, image_name, result, feedback, alamat)
+
+        return {
+            **result,
+            "feedback": feedback,
+            "image_url": f"{os.getenv('STORAGE_BASE_URL')}/{image_name}"
+        }
+
     except Exception as e:
-        # Kita log errornya saja, tapi jangan gagalkan respon ke user
-        print(f"BFF Storage/DB Error: {e}")
-
-    # 7. Hasil Akhir
-    return {**result, "feedback": feedback}
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail="Gagal memproses data.")
 
 @app.get("/history", response_model=List[HistoryItem])
-async def history(api_key: str = Depends(verify_api_key)):
+async def get_history(user_id: Optional[int] = None, api_key: str = Depends(verify_key)):
     try:
-        db = next(get_db())
-        cursor = db.cursor(dictionary=True)
-        cursor.execute(
-            "SELECT id, image_name, predicted_class, confidence, feedback, created_at FROM history_prediksi ORDER BY created_at DESC"
-        )
-        rows = cursor.fetchall()
-
+        # Panggil fungsi fetch yang sudah menggunakan JOIN
+        rows = await asyncio.to_thread(fetch_history_by_user, user_id)
+        
         base_url = os.getenv("STORAGE_BASE_URL")
+        history_list = []
         for row in rows:
-            row["image_url"] = f"{base_url}/{row['image_name']}"
-            row["created_at"] = str(row["created_at"])
-
-        return rows
+            history_list.append({
+                "id": row['id'],
+                "user_id": row['user_id'],
+                "user_name": row['user_name'],
+                "image_url": f"{base_url}/{row['image_name']}",
+                "predicted_class": row['predicted_class'],
+                "confidence": row['confidence'],
+                "feedback": row['feedback'],
+                "alamat": row['alamat'],
+                "created_at": str(row['created_at'])
+            })
+        return history_list
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
