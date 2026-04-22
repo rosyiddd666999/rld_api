@@ -11,25 +11,25 @@ def get_db_conn():
         connect_timeout=10
     )
 
-def get_or_create_user(google_id, email, name, photo_url=None):
+def get_or_create_user(google_id, email, name):
     conn = get_db_conn()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        # Cek apakah user sudah ada
-        cursor.execute("SELECT id FROM users WHERE google_id = %s", (google_id,))
-        user = cursor.fetchone()
-        
-        if user:
-            return user['id']
-        
-        # Jika belum ada, buat user baru
-        query = "INSERT INTO users (google_id, email, name, photo_url) VALUES (%s, %s, %s, %s)"
-        cursor.execute(query, (google_id, email, name, photo_url))
-        conn.commit()
-        return cursor.lastrowid
-    finally:
-        cursor.close()
-        conn.close()
+    cursor = conn.cursor()
+    
+    # Use INSERT IGNORE to skip if email already exists
+    cursor.execute("""
+        INSERT IGNORE INTO users (google_id, email, name)
+        VALUES (%s, %s, %s)
+    """, (google_id, email, name))
+    
+    conn.commit()
+    
+    # Always fetch the user after insert
+    cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    return user['id']
 
 def save_prediction(user_id, image_name, result, feedback, alamat=None):
     conn = get_db_conn()
