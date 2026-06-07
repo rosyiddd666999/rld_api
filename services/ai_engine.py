@@ -3,7 +3,7 @@ import io
 import urllib.request
 import numpy as np
 from PIL import Image
-import tensorflow as tf
+import keras
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,7 +26,7 @@ def get_model():
             print("Download selesai!")
 
         # Load model setelah dipastikan filenya ada
-        _model = tf.keras.models.load_model(MODEL_PATH)
+        _model = keras.models.load_model(MODEL_PATH)
     return _model
 
 def predict_image(image_bytes: bytes) -> dict:
