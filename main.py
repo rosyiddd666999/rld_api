@@ -9,10 +9,10 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Header, F
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from models import PredictionResponse, HistoryItem
+from models import PredictionResponse, HistoryItem, ProfileResponse
 from services.ai_engine import predict_image, get_model
 from services.gemini_logic import get_rice_feedback
-from services.database import get_or_create_user, save_prediction, fetch_history_by_user
+from services.database import get_or_create_user, save_prediction, fetch_history_by_user, update_user_profile, get_user_profile
 
 load_dotenv()
 
@@ -97,6 +97,8 @@ async def predict(
     email: str = Form(...),
     name: str = Form(...),
     alamat: str = Form(None),
+    latitude: float = Form(None),
+    longitude: float = Form(None),
     api_key: str = Depends(verify_key),
 ):
     # 1. Baca file
@@ -126,7 +128,7 @@ async def predict(
 
     # 5. Simpan ke database history
     try:
-        await asyncio.to_thread(save_prediction, user_id, image_name, result, feedback, alamat)
+        await asyncio.to_thread(save_prediction, user_id, image_name, result, feedback, alamat, latitude, longitude)
     except Exception as e:
         # Log tapi jangan gagalkan response — prediksi sudah selesai
         print(f"[Predict] Gagal simpan history ke DB: {e}")
@@ -165,7 +167,51 @@ async def get_history(
             "confidence": row["confidence"],
             "feedback": row["feedback"],
             "alamat": row["alamat"],
+   	    "latitude": row["latitude"],
+    	    "longitude": row["longitude"],
             "created_at": str(row["created_at"]),
         })
 
     return history_list
+
+# ──────────────────────────────────────────────
+# POST /profile (save address from register/edit)
+# ──────────────────────────────────────────────
+@app.post("/profile", response_model=ProfileResponse)
+async def update_profile(
+    google_id: str = Form(...),
+    alamat: str = Form(None),
+    latitude: float = Form(None),
+    longitude: float = Form(None),
+    api_key: str = Depends(verify_key),
+):
+    try:
+        row = await asyncio.to_thread(update_user_profile, google_id, alamat, latitude, longitude)
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Profile] Update error: {e}")
+        raise HTTPException(status_code=500, detail="Gagal update profil")
+
+
+# ──────────────────────────────────────────────
+# GET /profile (auto-fill address before detect)
+# ──────────────────────────────────────────────
+@app.get("/profile", response_model=ProfileResponse)
+async def get_profile(
+    google_id: str,
+    api_key: str = Depends(verify_key),
+):
+    try:
+        row = await asyncio.to_thread(get_user_profile, google_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Profile] Fetch error: {e}")
+        raise HTTPException(status_code=500, detail="Gagal mengambil profil")

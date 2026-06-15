@@ -1,0 +1,20 @@
+services:
+  rld-backend:
+    build: .
+    container_name: app-rld-api
+    restart: always
+    env_file:
+      - .env
+    networks:
+      - homelab-network
+    labels:
+      - "traefik.enable=true"
+      # Routing Domain via Traefik & Cloudflare Tunnel
+      - "traefik.http.routers.rld-router.rule=Host(\"rld-lab.abdulrosyid.my.id\")"
+      - "traefik.http.routers.rld-router.entrypoints=web"
+      - "traefik.http.services.rld-service.loadbalancer.server.port=8000"
+      - "traefik.docker.network=homelab-network"
+
+networks:
+  homelab-network:
+    external: true

@@ -17,4 +17,14 @@ class HistoryItem(BaseModel):
     confidence: float
     feedback: str
     alamat: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     created_at: str
+
+class ProfileResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    alamat: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None

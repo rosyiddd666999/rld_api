@@ -25,6 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Menyalin seluruh kode proyek ke dalam direktori kerja kontainer
 COPY . .
 
+RUN apt-get update && apt-get install -y curl && \
+    curl -L -o MobileNetV2_RiceLeaf.onnx https://huggingface.co/roosyid66/rice-leaf-model/resolve/main/MobileNetV2_RiceLeaf.onnx
+
 # Menentukan port yang akan digunakan di dalam kontainer (ganti jika Anda menggunakan port lain selain 8000)
 EXPOSE 8000
 
